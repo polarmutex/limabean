@@ -1,7 +1,7 @@
 use beancount_parser_lima::{self as parser};
 use limabean_booking::{
     Booking, Bookings, Interpolated, LimaParserBookingTypes, LimaTolerance, Tolerance,
-    is_supported_method,
+    ToleranceCurrency, ToleranceNumber, is_supported_method,
 };
 
 use rust_decimal::Decimal;
@@ -16,6 +16,53 @@ use time::Date;
 
 use crate::api::types::{ElementIdx, IndexedReport, booked, raw};
 
+#[derive(Clone, Debug)]
+struct CostInferredTolerance<'a, 't> {
+    base: &'t LimaTolerance<'a>,
+    multiplier: Decimal,
+}
+
+impl<'a> Tolerance for CostInferredTolerance<'a, '_> {
+    type Types = LimaParserBookingTypes<'a>;
+
+    fn inferred_tolerance_default(
+        &self,
+        cur: &ToleranceCurrency<Self>,
+    ) -> Option<ToleranceNumber<Self>> {
+        self.base.inferred_tolerance_default(cur)
+    }
+
+    fn inferred_tolerance_multiplier(&self) -> Option<ToleranceNumber<Self>> {
+        Some(self.multiplier)
+    }
+}
+
+fn cost_tolerance_multiplier(postings: &[&raw::PostingSpec<'_>], base_multiplier: Decimal) -> Decimal {
+    postings
+        .iter()
+        .filter_map(|p| {
+            let cost = p.cost_spec.as_ref()?;
+            if cost.total.is_some() {
+                return None;
+            }
+            let per_unit = cost.per_unit?;
+            let units = p.units?;
+            let units_scale = units.scale();
+            let cost_scale = per_unit.scale();
+            // mirrors sane_scale() in limabean-booking: weight is computed at units_scale
+            // unless units are integers, in which case cost_scale is used
+            let weight_scale = if units_scale == 0 { cost_scale } else { units_scale };
+            // beancount cost-inferred tolerance per posting: base × |units| × 10^(-cost_scale)
+            // expressed as multiplier for the scale-based check 10^(-weight_scale):
+            //   multiplier × 10^(-weight_scale) = base × |units| × 10^(-cost_scale)
+            //   multiplier = base × |units| × 10^(weight_scale - cost_scale)
+            Decimal::new(1, cost_scale)
+                .checked_div(Decimal::new(1, weight_scale))
+                .map(|scale_ratio| base_multiplier * units.abs() * scale_ratio)
+        })
+        .fold(base_multiplier, |acc, m| if m > acc { m } else { acc })
+}
+
 #[derive(Debug)]
 pub(crate) struct Accumulator<'a, 't> {
     // hashbrown HashMaps are used here for their Entry API, which is still unstable in std::collections::HashMap
@@ -24,6 +71,7 @@ pub(crate) struct Accumulator<'a, 't> {
     accounts: HashMap<&'a str, AccountBuilder<'a>>,
     default_booking: Booking,
     tolerance: &'t LimaTolerance<'a>,
+    infer_tolerance_from_cost: bool,
     warnings: Vec<IndexedReport>,
 }
 
@@ -37,13 +85,18 @@ pub(crate) struct BookingFailure {
 }
 
 impl<'a, 't> Accumulator<'a, 't> {
-    pub(crate) fn new(default_booking: Booking, tolerance: &'t LimaTolerance<'a>) -> Self {
+    pub(crate) fn new(
+        default_booking: Booking,
+        tolerance: &'t LimaTolerance<'a>,
+        infer_tolerance_from_cost: bool,
+    ) -> Self {
         Self {
             open_accounts: hashbrown::HashMap::default(),
             closed_accounts: hashbrown::HashMap::default(),
             accounts: HashMap::default(),
             default_booking,
             tolerance,
+            infer_tolerance_from_cost,
             warnings: Vec::default(),
         }
     }
@@ -202,18 +255,44 @@ impl<'a, 't> Accumulator<'a, 't> {
         // ugh, difference of reference vs value
         let postings = postings.iter().collect::<Vec<_>>();
 
-        match limabean_booking::book(
-            date,
-            &postings,
-            self.tolerance,
-            |accname| self.accounts.get(accname).map(|acc| &acc.positions),
-            |accname| {
-                self.accounts
-                    .get(accname)
-                    .map(|acc| acc.booking)
-                    .unwrap_or(self.default_booking)
-            },
-        ) {
+        let booking_result = if self.infer_tolerance_from_cost {
+            let base = self
+                .tolerance
+                .inferred_tolerance_multiplier()
+                .unwrap_or_else(|| Decimal::new(5, 1));
+            let multiplier = cost_tolerance_multiplier(&postings, base);
+            let tol = CostInferredTolerance {
+                base: self.tolerance,
+                multiplier,
+            };
+            limabean_booking::book(
+                date,
+                &postings,
+                &tol,
+                |accname| self.accounts.get(accname).map(|acc| &acc.positions),
+                |accname| {
+                    self.accounts
+                        .get(accname)
+                        .map(|acc| acc.booking)
+                        .unwrap_or(self.default_booking)
+                },
+            )
+        } else {
+            limabean_booking::book(
+                date,
+                &postings,
+                self.tolerance,
+                |accname| self.accounts.get(accname).map(|acc| &acc.positions),
+                |accname| {
+                    self.accounts
+                        .get(accname)
+                        .map(|acc| acc.booking)
+                        .unwrap_or(self.default_booking)
+                },
+            )
+        };
+
+        match booking_result {
             Ok(Bookings {
                 interpolated_postings,
                 updated_inventory,
