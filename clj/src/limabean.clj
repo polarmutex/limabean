@@ -91,6 +91,13 @@
   [& args]
   (bean-queries/journal *beans* args))
 
+(defn errors
+  "Return errors from `*beans*`, or nil if there are none.
+
+  Keys in the returned map: :parser, :plugins, :booking, :raw-plugin, :booked-plugin."
+  []
+  (bean-queries/errors *beans*))
+
 (defn show "Convert `x` to a cell and tabulate it." [x] (show/show x))
 
 (defn version

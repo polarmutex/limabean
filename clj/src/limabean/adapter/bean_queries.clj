@@ -84,3 +84,17 @@
   Custom directives may be passed in after the filters using :directives."
   [beans args]
   (journal/build (postings beans args)))
+
+(defn errors
+  "Extract errors from `beans`. Returns nil if there are no errors.
+
+  Plugin load errors are enriched with plugin names from the :plugins vector."
+  [beans]
+  (let [error-map (:error beans)
+        bad-plugins (seq (filter :err (:plugins beans)))]
+    (when (or error-map bad-plugins)
+      (cond-> (dissoc error-map :plugins)
+        bad-plugins (assoc :plugins
+                      (mapv (fn [{:keys [name err]}]
+                              {:name name :message (:message err)})
+                            bad-plugins))))))
