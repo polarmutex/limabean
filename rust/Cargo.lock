@@ -624,8 +624,7 @@ dependencies = [
 [[package]]
 name = "limabean-booking"
 version = "0.10.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "883f674d60837f4702f517d1d87be136f0052648f43e05cb417508ee5fd7c889"
+source = "git+https://github.com/polarmutex/limabean-booking.git?branch=infer-tolerance-from-cost#36e4f8e745f17fbefb986a4afcbe4772faed90ad"
 dependencies = [
  "beancount-parser-lima",
  "hashbrown 0.15.5",

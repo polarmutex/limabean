@@ -16,26 +16,27 @@
 
   outputs = inputs:
     inputs.flake-utils.lib.eachDefaultSystem
-      (system:
-        let
-          overlays = [ (import inputs.rust-overlay) ];
-          pkgs = import inputs.nixpkgs {
-            inherit system;
-          };
-          pkgs-with-rust-overlay = import inputs.nixpkgs {
-            inherit system overlays;
-          };
-          flakePkgs = {
-            autobean-format = inputs.autobean-format.packages.${system}.default;
-          };
-          # cargo-nightly based on https://github.com/oxalica/rust-overlay/issues/82
-          nightly = pkgs-with-rust-overlay.rust-bin.selectLatestNightlyWith (t: t.default);
-          cargo-nightly = pkgs.writeShellScriptBin "cargo-nightly" ''
-            export RUSTC="${nightly}/bin/rustc";
-            exec "${nightly}/bin/cargo" "$@"
-          '';
+    (
+      system: let
+        overlays = [(import inputs.rust-overlay)];
+        pkgs = import inputs.nixpkgs {
+          inherit system;
+        };
+        pkgs-with-rust-overlay = import inputs.nixpkgs {
+          inherit system overlays;
+        };
+        flakePkgs = {
+          autobean-format = inputs.autobean-format.packages.${system}.default;
+        };
+        # cargo-nightly based on https://github.com/oxalica/rust-overlay/issues/82
+        nightly = pkgs-with-rust-overlay.rust-bin.selectLatestNightlyWith (t: t.default);
+        cargo-nightly = pkgs.writeShellScriptBin "cargo-nightly" ''
+          export RUSTC="${nightly}/bin/rustc";
+          exec "${nightly}/bin/cargo" "$@"
+        '';
 
-          ci-packages = with pkgs; [
+        ci-packages = with pkgs;
+          [
             bashInteractive
             coreutils
             diffutils
@@ -46,58 +47,63 @@
             clojure
             neil
             git
-          ] ++ (lib.optionals (builtins.match ".*-linux" system != null) [
+          ]
+          ++ (lib.optionals (builtins.match ".*-linux" system != null) [
             gcc
-          ]) ++ (lib.optionals (builtins.match ".*-darwin" system != null) [
+          ])
+          ++ (lib.optionals (builtins.match ".*-darwin" system != null) [
             clang
             libiconv
           ]);
 
-          version = (builtins.fromTOML (builtins.readFile ./rust/Cargo.toml)).package.version;
-          limabean =
-            pkgs.rustPlatform.buildRustPackage
-              {
-                inherit version;
+        version = (builtins.fromTOML (builtins.readFile ./rust/Cargo.toml)).package.version;
+        limabean =
+          pkgs.rustPlatform.buildRustPackage
+          {
+            inherit version;
 
-                pname = "limabean";
+            pname = "limabean";
 
-                src = ./rust;
+            src = ./rust;
 
-                cargoDeps = pkgs.rustPlatform.importCargoLock {
-                  lockFile = ./rust/Cargo.lock;
-                };
-
-                meta = with pkgs.lib; {
-                  description = "Beancount frontend using Rust and Clojure and the Lima parser";
-                  homepage = "https://github.com/tesujimath/limabean";
-                  license = with licenses; [ asl20 mit ];
-                  # maintainers = [ maintainers.tesujimath ];
-                };
-
-                propagatedBuildInputs = with pkgs; [
-                  clojure
-                ];
+            cargoDeps = pkgs.rustPlatform.importCargoLock {
+              lockFile = ./rust/Cargo.lock;
+              outputHashes = {
+                "limabean-booking-0.10.4" = "sha256-mZRwSIzrxNJIsbhlsN1y6hsYvLhmwT5PoJ3jqLxLtM8=";
               };
+            };
 
-        in
-        with pkgs;
-        {
+            meta = with pkgs.lib; {
+              description = "Beancount frontend using Rust and Clojure and the Lima parser";
+              homepage = "https://github.com/tesujimath/limabean";
+              license = with licenses; [asl20 mit];
+              # maintainers = [ maintainers.tesujimath ];
+            };
+
+            propagatedBuildInputs = with pkgs; [
+              clojure
+            ];
+          };
+      in
+        with pkgs; {
           devShells.default = mkShell {
-            nativeBuildInputs = [
-              cargo-modules
-              cargo-nightly
-              cargo-udeps
-              cargo-outdated
-              cargo-edit
-              clippy
-              rustc
+            nativeBuildInputs =
+              [
+                cargo-modules
+                cargo-nightly
+                cargo-udeps
+                cargo-outdated
+                cargo-edit
+                clippy
+                rustc
 
-              jre
-              # useful tools:
-              beancount
-              beanquery
-              flakePkgs.autobean-format
-            ] ++ ci-packages;
+                jre
+                # useful tools:
+                beancount
+                beanquery
+                flakePkgs.autobean-format
+              ]
+              ++ ci-packages;
 
             shellHook = ''
               PATH=$PATH:$(pwd)/scripts.dev:$(pwd)/rust/target/debug
@@ -127,5 +133,5 @@
             };
           };
         }
-      );
+    );
 }

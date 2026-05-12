@@ -17,7 +17,7 @@ name = "limabean-pod"
 path = "src/bin/limabean-pod/main.rs"
 
 [dependencies]
-limabean-booking = { version = "0.10.4", features = [
+limabean-booking = {git="https://github.com/polarmutex/limabean-booking.git", branch="infer-tolerance-from-cost", version = "0.10.4", features = [
   "lima-parser-types",
   "rust-decimal",
 ] }
