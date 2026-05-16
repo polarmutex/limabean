@@ -9,15 +9,16 @@
 (defn cargo-version
   "Read the version from lima"
   []
-  (-> (sh/sh "cargo"
-             "metadata" "--no-deps"
-             "--format-version" "1"
-             "--manifest-path" "../rust/Cargo.toml")
-      :out
-      (cheshire/parse-string true)
-      :packages
-      first
-      :version))
+  (or (System/getenv "LIMABEAN_VERSION")
+      (-> (sh/sh "cargo"
+                 "metadata" "--no-deps"
+                 "--format-version" "1"
+                 "--manifest-path" "../rust/Cargo.toml")
+          :out
+          (cheshire/parse-string true)
+          :packages
+          first
+          :version)))
 
 (def lib 'io.github.tesujimath/limabean)
 (def version (cargo-version))

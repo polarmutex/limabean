@@ -57,6 +57,92 @@
           ]);
 
         version = (builtins.fromTOML (builtins.readFile ./rust/Cargo.toml)).package.version;
+
+        mavenRepo = pkgs.stdenv.mkDerivation {
+          name = "limabean-${version}-maven-deps";
+          src = ./clj;
+
+          nativeBuildInputs = [pkgs.clojure];
+
+          buildPhase = ''
+            runHook preBuild
+
+            export HOME="$(mktemp -d)"
+            mkdir -p "$out"
+
+            clj -Sdeps "{:mvn/local-repo \"$out\"}" -P
+            clj -Sdeps "{:mvn/local-repo \"$out\"}" -P -M:build
+
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+
+            find "$out" -type f \( \
+              -name \*.lastUpdated \
+              -o -name resolver-status.properties \) \
+              -delete
+
+            # Strip timestamps from _remote.repositories so Aether knows artifacts
+            # came from central without causing hash non-determinism.
+            find "$out" -name '_remote.repositories' -exec sed -i '/^#/d' {} \;
+
+            runHook postInstall
+          '';
+
+          dontFixup = true;
+
+          outputHash = "sha256-7mKCllzo++KK+k12lwOCa6tc/Di+riVhLqMuMp9UzUk=";
+          outputHashMode = "recursive";
+          outputHashAlgo = "sha256";
+        };
+
+        uberjar = pkgs.stdenv.mkDerivation {
+          pname = "limabean-uberjar";
+          inherit version;
+
+          src = ./clj;
+
+          nativeBuildInputs = [pkgs.clojure];
+
+          env.LIMABEAN_VERSION = version;
+
+          buildPhase = ''
+            runHook preBuild
+
+            export HOME="$(mktemp -d)"
+
+            # Java's user.home in the Nix sandbox is /build (not our mktemp dir),
+            # so the default Maven local repo fallback is /build/.m2/repository.
+            # Symlink it to our pre-fetched mavenRepo so Aether finds all artifacts.
+            mkdir -p /build/.m2
+            ln -s "${mavenRepo}" /build/.m2/repository
+
+            # Also configure via CLJ_CONFIG as belt-and-suspenders.
+            export CLJ_CONFIG="$HOME/.clojure"
+            mkdir -p "$CLJ_CONFIG"
+            echo "{:mvn/local-repo \"${mavenRepo}\"}" > "$CLJ_CONFIG/deps.edn"
+
+            clj -T:build uber 2>&1 || {
+              echo "=== error report ===" >&2
+              find /tmp -name "clojure-*.edn" 2>/dev/null | xargs cat >&2 2>/dev/null || true
+              exit 1
+            }
+
+            runHook postBuild
+          '';
+
+          installPhase = ''
+            runHook preInstall
+
+            mkdir -p "$out/share/java"
+            cp target/limabean-*-standalone.jar "$out/share/java/limabean-standalone.jar"
+
+            runHook postInstall
+          '';
+        };
+
         limabean =
           pkgs.rustPlatform.buildRustPackage
           {
@@ -121,7 +207,16 @@
             '';
           };
 
-          packages.default = limabean;
+          packages.default = pkgs.symlinkJoin {
+            name = "limabean-${version}";
+            paths = [limabean];
+            nativeBuildInputs = [pkgs.makeWrapper];
+            postBuild = ''
+              wrapProgram $out/bin/limabean \
+                --set LIMABEAN_UBERJAR ${uberjar}/share/java/limabean-standalone.jar
+            '';
+          };
+          packages.uberjar = uberjar;
 
           apps = {
             tests = {
